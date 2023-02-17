@@ -42,11 +42,20 @@
 #include "libbb.h"
 
 #include <linux/random.h>
-#include <sys/random.h>
 #include <sys/file.h>
 
+#define HAVE_SYS_RANDOM_H 1
+#if defined(__GLIBC_PREREQ)
+#if !__GLIBC_PREREQ(2, 25)
+#undef HAVE_SYS_RANDOM_H
+#endif
+#endif
+
+#if defined(HAVE_SYS_RANDOM_H)
+#include <sys/random.h>
 #ifndef GRND_INSECURE
 #define GRND_INSECURE 0x0004 /* Apparently some headers don't ship with this yet. */
+#endif
 #endif
 
 #define DEFAULT_SEED_DIR         "/var/lib/seedrng"
@@ -81,13 +90,15 @@ static size_t determine_optimal_seed_len(void)
 static bool read_new_seed(uint8_t *seed, size_t len)
 {
 	bool is_creditable;
-	ssize_t ret;
 
-	ret = getrandom(seed, len, GRND_NONBLOCK);
+#if defined(HAVE_SYS_RANDOM_H)
+	ssize_t ret = getrandom(seed, len, GRND_NONBLOCK);
 	if (ret == (ssize_t)len) {
 		return true;
 	}
-	if (ret < 0 && errno == ENOSYS) {
+	if (ret < 0 && errno == ENOSYS)
+#endif
+	{
 		int fd = xopen("/dev/random", O_RDONLY);
 		struct pollfd random_fd;
 		random_fd.fd = fd;
@@ -96,11 +107,14 @@ static bool read_new_seed(uint8_t *seed, size_t len)
 //This is racy. is_creditable can be set to true here, but other process
 //can consume "good" random data from /dev/urandom before we do it below.
 		close(fd);
-	} else {
+	}
+#if defined(HAVE_SYS_RANDOM_H)
+	else {
 		if (getrandom(seed, len, GRND_INSECURE) == (ssize_t)len)
 			return false;
 		is_creditable = false;
 	}
+#endif
 
 	/* Either getrandom() is not implemented, or
 	 * getrandom(GRND_INSECURE) did not give us LEN bytes.
